@@ -1,0 +1,299 @@
+<!DOCTYPE html> <!-- HTML5 doctype (standards mode) -->
+<html lang="en"> <!-- Root element + language hint for a11y/SEO -->
+<head> <!-- Metadata + resources start -->
+  <meta charset="UTF-8" /> <!-- UTF-8 text encoding -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" /> <!-- Mobile-friendly scaling -->
+  <title>Minimal Tower Defense</title> <!-- Browser tab title -->
+   
+  <style> /* Embedded stylesheet */
+    :root { /* Theme variables */
+      --bg:#0f1221; --panel:#191d38; --accent:#7ee787; --text:#dbe2ff; /* Core colors */
+      --ink:#a8b3ff; --road:#2b324f; --dash:#8892bf55; --goal:#ffd166; /* Accents */
+    } /* End :root */
+
+    * { box-sizing: border-box; } /* Include padding/border in element size */
+
+    body { /* Page base */
+      margin: 0; /* Remove default margins */
+      font-family: system-ui, Segoe UI, Roboto, Helvetica, Arial, sans-serif; /* Modern font stack */
+      background: var(--bg); color: var(--text); /* Dark theme */
+      display: grid; place-items: center; gap: 12px; padding: 18px; /* Center content */
+    } /* End body */
+
+    .hud { /* Top status bar */
+      width: 800px; /* Match canvas width */
+      background: var(--panel); /* Panel color */
+      border-radius: 12px; padding: 10px 12px; /* Rounding + padding */
+      display: flex; align-items: center; justify-content: space-between; gap: 8px; /* Layout */
+      box-shadow: 0 8px 24px rgba(0,0,0,.25); /* Depth */
+    } /* End .hud */
+
+    .stats { display: flex; gap: 14px; align-items: center; font-weight: 600; } /* Stat row */
+    .stats span { background: #11152a; padding: 6px 10px; border-radius: 10px; } /* Stat chip */
+
+    button { /* Primary action buttons */
+      background: var(--accent); color: #05170d; /* High contrast text */
+      border: none; border-radius: 10px; padding: 10px 14px; cursor: pointer; /* Shape + UX */
+      font-weight: 700; /* Emphasis */
+    } /* End button */
+    button:disabled { opacity: .6; cursor: not-allowed; } /* Disabled state */
+
+    #game { /* Game canvas frame */
+      background: #091018; /* Canvas bg (also cleared in JS) */
+      border: 2px solid #20264a; border-radius: 12px; /* Frame */
+      box-shadow: 0 12px 30px rgba(0,0,0,.35); /* Depth */
+      width: 800px; height: 500px; /* Mirror intrinsic size for crispness */
+      display: block; /* Eliminate inline gap */
+    } /* End #game */
+
+    .hint { opacity: .8; font-size: 13px; } /* Subtle tip text */
+  </style> <!-- End styles -->
+</head> <!-- End head -->
+<body> <!-- Visible content -->
+
+  <!-- =============================
+       HUD (INFO + CONTROLS)
+       ============================= -->
+  <div class="hud"> <!-- Status panel wrapper -->
+    <div class="stats"> <!-- Stats cluster -->
+      <span>💰 Money: <b id="money">100</b></span> <!-- Money value (updated by JS) -->
+      <span>❤️ Lives: <b id="lives">20</b></span> <!-- Lives value (updated by JS) -->
+      <span>🌊 Wave: <b id="wave">1</b></span> <!-- Wave counter (updated by JS) -->
+      <span>🗼 Towers: <b id="towerCount">0</b></span> <!-- Tower count (updated by JS) -->
+    </div> <!-- End .stats -->
+
+    <div style="display:flex; gap:8px; align-items:center;"> <!-- Action buttons -->
+      <button id="startWaveBtn">Start Wave</button> <!-- Triggers enemy spawns -->
+      <button id="buildBtn">Build Tower (50)</button> <!-- Enters build mode -->
+    </div> <!-- End button group -->
+  </div> <!-- End .hud -->
+
+  <!-- =============================
+       GAME SURFACE
+       ============================= -->
+  <canvas id="game" width="800" height="500"></canvas> <!-- Drawing surface -->
+  <div class="hint"> <!-- Quick instructions -->
+    Tip: Click <b>Build Tower</b>, then click on the map (avoid the road). Towers auto-fire at the nearest enemy in range. Press <b>Esc</b> to cancel build.
+  </div> <!-- End hint -->
+
+  <!-- =============================
+       GAME LOGIC (JAVASCRIPT)
+       ============================= -->
+  <script> // Begin game script
+    // ---------- Canvas + UI ----------
+    const canvas = document.getElementById('game'); // Canvas element
+    const ctx = canvas.getContext('2d'); // 2D drawing context
+
+    const ui = { // Cache DOM lookups
+      money: document.getElementById('money'), // Money field
+      lives: document.getElementById('lives'), // Lives field
+      wave: document.getElementById('wave'), // Wave field
+      towerCount: document.getElementById('towerCount'), // Tower count field
+      startWaveBtn: document.getElementById('startWaveBtn'), // Start wave button
+      buildBtn: document.getElementById('buildBtn'), // Build button
+    }; // End ui
+
+    // ---------- Game State ----------
+    const state = { // Centralized state
+      money: 100, // Starting currency
+      lives: 20, // Starting lives
+      wave: 1, // Current wave index
+      spawning: false, // Are we mid-wave spawn?
+      buildMode: false, // Are we placing a tower?
+      enemies: [], // Active enemies
+      towers: [], // Placed towers
+      bullets: [], // Active bullets
+      time: 0, // Elapsed seconds
+    }; // End state
+
+    // ---------- Path / Road ----------
+    const waypoints = [ // Enemy path points
+      {x:  20, y:  60}, // Start
+      {x: 200, y:  60}, // Right
+      {x: 200, y: 220}, // Down
+      {x: 420, y: 220}, // Right
+      {x: 420, y: 120}, // Up
+      {x: 700, y: 120}, // Right
+      {x: 700, y: 420}, // Down
+      {x: 780, y: 420}, // Exit
+    ]; // End waypoints
+    const ROAD_WIDTH = 70; // Visual road width & no-build radius
+
+    // ---------- Math Helpers ----------
+    function dist(a,b) { const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); } // Euclidean distance
+    function pointToSegmentDistance(px,py,x1,y1,x2,y2) { // Point-to-segment distance
+      const A=px-x1, B=py-y1, C=x2-x1, D=y2-y1; // Vectors
+      const dot=A*C+B*D, len=C*C+D*D; let t=len?dot/len:-1; // Projection
+      t=Math.max(0,Math.min(1,t)); // Clamp to [0,1]
+      const xx=x1+t*C, yy=y1+t*D; const dx=px-xx, dy=py-yy; // Closest point
+      return Math.hypot(dx,dy); // Distance
+    } // End pointToSegmentDistance
+    function pointOnRoad(p) { // Is point inside road band?
+      for (let i=0;i<waypoints.length-1;i++) { // Each segment
+        const a=waypoints[i], b=waypoints[i+1]; // Endpoints
+        if (pointToSegmentDistance(p.x,p.y,a.x,a.y,b.x,b.y) <= ROAD_WIDTH/2) return true; // Inside band
+      } // End loop
+      return false; // Not on road
+    } // End pointOnRoad
+
+    // ---------- Entities ----------
+    class Enemy { // Moves along path, costs lives, yields money
+      constructor() { // Initialize
+        this.x=waypoints[0].x; this.y=waypoints[0].y; // Spawn at start
+        this.speed=50+Math.min(40,state.wave*3); // Speed scales by wave
+        this.hpMax=40+state.wave*20; this.hp=this.hpMax; // Health scales by wave
+        this.wayIndex=1; // Next waypoint target
+        this.alive=true; // Active flag
+        this.reward=8+Math.floor(state.wave*1.2); // Money on death
+      } // End constructor
+      update(dt) { // Move along path
+        if (!this.alive) return; // Skip if dead
+        const wp=waypoints[this.wayIndex]; // Current target
+        const dx=wp.x-this.x, dy=wp.y-this.y, d=Math.hypot(dx,dy); // Vector
+        if (d<1) { // Close enough to switch
+          this.wayIndex++; // Next waypoint
+          if (this.wayIndex>=waypoints.length) { // Reached end
+            this.alive=false; // Despawn
+            state.lives=Math.max(0,state.lives-1); // Lose a life
+            return; // Done this tick
+          } // End goal reached
+          return; // Wait next tick for new vector
+        } // End switch check
+        const nx=dx/d, ny=dy/d; this.x+=nx*this.speed*dt; this.y+=ny*this.speed*dt; // Step toward target
+      } // End update
+      damage(dmg) { this.hp-=dmg; if (this.hp<=0) { this.alive=false; state.money+=this.reward; } } // Take damage / reward
+      draw() { // Render body + HP bar
+        ctx.fillStyle='#f25f5c'; ctx.beginPath(); ctx.arc(this.x,this.y,12,0,Math.PI*2); ctx.fill(); // Body
+        const w=26,h=4, px=this.x-w/2, py=this.y-20; // Bar geometry
+        ctx.fillStyle='#2b324f'; ctx.fillRect(px,py,w,h); // Bar bg
+        ctx.fillStyle='#7ee787'; ctx.fillRect(px,py,w*(this.hp/this.hpMax),h); // Bar fill
+      } // End draw
+    } // End Enemy
+
+    class Tower { // Stationary shooter
+      constructor(x,y) { this.x=x; this.y=y; this.range=120; this.fireDelay=0.5; this.cooldown=0; this.damage=14; } // Stats
+      update(dt) { // Seek target + fire
+        this.cooldown-=dt; // Tick cooldown
+        if (this.cooldown<=0) { // Ready
+          let best=null, bestD=Infinity; // Track nearest
+          for (const e of state.enemies) { if (!e.alive) continue; const d=dist(this,e); if (d<this.range && d<bestD) { best=e; bestD=d; } } // Scan
+          if (best) { this.cooldown=this.fireDelay; state.bullets.push(new Bullet(this.x,this.y,best)); } // Shoot
+        } // End ready
+      } // End update
+      draw() { // Render base + barrel
+        ctx.save(); // Save transform
+        ctx.strokeStyle='rgba(126,231,135,0.12)'; ctx.beginPath(); ctx.arc(this.x,this.y,this.range,0,Math.PI*2); ctx.stroke(); // Range ring
+        ctx.translate(this.x,this.y); // Move origin
+        ctx.fillStyle='#91a6ff'; ctx.beginPath(); ctx.arc(0,0,14,0,Math.PI*2); ctx.fill(); // Base
+        let angle=0, nearest=null, nd=1e9; // Aim vars
+        for (const e of state.enemies) { if (!e.alive) continue; const d=dist({x:this.x,y:this.y},e); if (d<nd) { nd=d; nearest=e; } } // Nearest enemy
+        if (nearest) angle=Math.atan2(nearest.y-this.y,nearest.x-this.x); // Aim at nearest
+        ctx.rotate(angle); // Rotate barrel
+        ctx.fillStyle='#c3d1ff'; ctx.fillRect(6,-4,16,8); // Barrel
+        ctx.restore(); // Restore transform
+      } // End draw
+    } // End Tower
+
+    class Bullet { // Homing projectile
+      constructor(x,y,target) { this.x=x; this.y=y; this.target=target; this.speed=340; this.size=3; this.alive=true; } // Init
+      update(dt) { // Fly toward target
+        if (!this.target || !this.target.alive) { this.alive=false; return; } // Drop if no target
+        const dx=this.target.x-this.x, dy=this.target.y-this.y, d=Math.hypot(dx,dy); // Vector
+        if (d<8) { this.alive=false; this.target.damage(14); return; } // Hit
+        const nx=dx/d, ny=dy/d; this.x+=nx*this.speed*dt; this.y+=ny*this.speed*dt; // Step
+      } // End update
+      draw() { ctx.fillStyle='#7ee787'; ctx.beginPath(); ctx.arc(this.x,this.y,this.size,0,Math.PI*2); ctx.fill(); } // Dot
+    } // End Bullet
+
+    // ---------- Wave Spawner ----------
+    function spawnWave() { // Timed spawns
+      if (state.spawning) return; // Already spawning
+      state.spawning=true; // Mark
+      let toSpawn=Math.min(22,10+state.wave*3); // Count this wave
+      let spawned=0, acc=0; const interval=0.8; // Counters + cadence
+      const spawner=(dt)=>{ // Per-frame callback
+        acc+=dt; if (acc>=interval && spawned<toSpawn) { acc-=interval; state.enemies.push(new Enemy()); spawned++; } // Spawn
+        if (spawned>=toSpawn && state.enemies.every(e=>!e.alive)) { // Finished
+          state.spawning=false; state.wave++; ui.wave.textContent=state.wave; window.offTick(spawner); // Advance
+        } // End complete check
+      }; // End spawner
+      window.onTick(spawner); // Register
+    } // End spawnWave
+
+    // ---------- Input / Build Mode ----------
+    ui.buildBtn.addEventListener('click',()=>{ state.buildMode=true; }); // Enter build mode
+    document.addEventListener('keydown',(e)=>{ if (e.key==='Escape') state.buildMode=false; }); // Esc to cancel
+
+    const hover={x:-1000,y:-1000}; // Mouse hover (offscreen default)
+    canvas.addEventListener('mousemove',(e)=>{ const r=canvas.getBoundingClientRect(); hover.x=e.clientX-r.left; hover.y=e.clientY-r.top; }); // Track mouse
+    canvas.addEventListener('click',(e)=>{ if(!state.buildMode) return; const r=canvas.getBoundingClientRect(); const x=e.clientX-r.left, y=e.clientY-r.top; placeTower(x,y); }); // Place tower
+
+    function placeTower(x,y) { // Validate + place
+      const COST=50, pos={x,y}; // Cost + pos
+      if (state.money<COST) return; // Not enough money
+      if (pointOnRoad(pos)) return; // No road placements
+      for (const t of state.towers) { if (dist(pos,t)<28) return; } // Keep spacing
+      state.towers.push(new Tower(x,y)); // Add
+      state.money-=COST; state.buildMode=false; // Pay + exit build
+    } // End placeTower
+
+    ui.startWaveBtn.addEventListener('click',()=>spawnWave()); // Start wave
+
+    // ---------- Game Loop ----------
+    let last=performance.now(); // Previous frame time
+    const tickers=new Set(); // Per-frame callbacks
+    window.onTick=(fn)=>tickers.add(fn); // Register ticker
+    window.offTick=(fn)=>tickers.delete(fn); // Unregister ticker
+
+    function update(dt) { // Advance simulation
+      state.time+=dt; // Time
+      for (const e of state.enemies) e.update(dt); // Enemies
+      state.enemies=state.enemies.filter(e=>e.alive); // Cull
+      for (const t of state.towers) t.update(dt); // Towers
+      for (const b of state.bullets) b.update(dt); // Bullets
+      state.bullets=state.bullets.filter(b=>b.alive); // Cull
+      for (const fn of [...tickers]) fn(dt); // Tickers
+      ui.money.textContent=state.money; ui.lives.textContent=state.lives; ui.wave.textContent=state.wave; ui.towerCount.textContent=state.towers.length; // HUD sync
+      if (state.lives<=0) { // Defeat check
+        Object.assign(state,{money:100,lives:20,wave:1,spawning:false,buildMode:false,enemies:[],towers:[],bullets:[],time:0}); // Reset
+        alert('Game Over! Restarting...'); // Message
+      } // End defeat
+    } // End update
+
+    function draw() { // Render frame
+      ctx.clearRect(0,0,canvas.width,canvas.height); // Clear
+      ctx.fillStyle='#0b1522'; ctx.fillRect(0,0,canvas.width,canvas.height); // Background
+      ctx.lineWidth=ROAD_WIDTH; ctx.lineCap='round'; ctx.strokeStyle=varColor('--road','#2b324f'); // Road style
+      ctx.beginPath(); ctx.moveTo(waypoints[0].x,waypoints[0].y); for (let i=1;i<waypoints.length;i++) ctx.lineTo(waypoints[i].x,waypoints[i].y); ctx.stroke(); // Road
+      ctx.lineWidth=3; ctx.setLineDash([10,10]); ctx.strokeStyle=varColor('--dash','#8892bf55'); // Dashed center
+      ctx.beginPath(); ctx.moveTo(waypoints[0].x,waypoints[0].y); for (let i=1;i<waypoints.length;i++) ctx.lineTo(waypoints[i].x,waypoints[i].y); ctx.stroke(); ctx.setLineDash([]); // Draw dashed
+      ctx.fillStyle=varColor('--goal','#ffd166'); ctx.fillRect(770,400,20,80); // Goal post
+      for (const t of state.towers) t.draw(); // Towers
+      for (const e of state.enemies) e.draw(); // Enemies
+      for (const b of state.bullets) b.draw(); // Bullets
+      if (state.buildMode) { // Build preview
+        const valid=!pointOnRoad(hover)&&state.towers.every(t=>dist(hover,t)>=28)&&state.money>=50; // Valid?
+        ctx.save(); ctx.globalAlpha=valid?0.9:0.4; ctx.translate(hover.x,hover.y); // Style + pos
+        ctx.fillStyle=valid?'#91f2a2':'#f28b82'; ctx.beginPath(); ctx.arc(0,0,14,0,Math.PI*2); ctx.fill(); // Ghost base
+        ctx.strokeStyle='rgba(145,242,162,0.22)'; ctx.beginPath(); ctx.arc(0,0,120,0,Math.PI*2); ctx.stroke(); // Range ring
+        ctx.restore(); // Restore
+      } // End preview
+      ctx.font='12px system-ui, sans-serif'; ctx.fillStyle=varColor('--ink','#a8b3ff'); ctx.fillText('Start →',24,50); ctx.fillText('Goal',772,392); // Labels
+    } // End draw
+
+    function loop(now) { // RAF callback
+      const dt=Math.min(0.033,(now-last)/1000); last=now; // Delta
+      update(dt); draw(); // Step + paint
+      requestAnimationFrame(loop); // Next frame
+    } // End loop
+
+    requestAnimationFrame(loop); // Start loop
+
+    // ---------- Tiny CSS var helper (for themed colors in canvas) ----------
+    function varColor(name,fallback) { // Read CSS var from :root
+      const v=getComputedStyle(document.documentElement).getPropertyValue(name).trim(); // Get value
+      return v||fallback; // Use fallback if empty
+    } // End varColor
+  </script> <!-- End script -->
+</body> <!-- End body -->
+</html> <!-- End document -->

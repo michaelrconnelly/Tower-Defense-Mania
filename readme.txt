@@ -1,15 +1,31 @@
-Double click the HTML file to begin, right click to view source code. It's possible not all code will show up at once due to certain lines not being called yet as it's a game, but I'll copy and paste it all at the bottom of this txt file just incase.
-
 How to Play
 
-1. Press Start Wave to begin.
+Start the Game
+Click Play on the main menu to enter the game.
 
-2. Press Build Tower, then click anywhere off the road to place a tower.
+Start a Wave
+Press Start Wave to begin spawning enemies.
+The button hides until the wave is finished.
 
-3. Towers automatically shoot enemies that follow the road.
+Build Towers
+Choose a tower type: Gun, Slow, or Sniper.
+Click on the map (not on the road) to place it.
+Towers automatically attack enemies within range.
 
-4. Each enemy defeated gives you money to build more towers.
+Tower Types
+Gun Tower: Fast shots, medium damage.
+Slow Tower: Low damage but slows enemies.
+Sniper Tower: High damage, long range, slower rate of fire.
 
-5. If enemies reach the end, you lose lives.
+Delete Towers
+Select Delete Tower, then click a tower to remove it and get a partial refund.
 
-6. Survive as many waves as possible.
+Pause & Resume
+Press Pause to freeze the game.
+Press Resume to continue.
+
+Game Over
+If enemies reach the goal and your lives hit zero, a Game Over screen appears.
+Click Restart to play again.
+
+SURVIVE AS LONG AS POSSIBLE!
